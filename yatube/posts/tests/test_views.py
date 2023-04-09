@@ -228,7 +228,7 @@ class PostPagesTests(TestCase):
     def test_index_page_show_correct_context(self):
         """Комментарий появляется на странице поста`"""
         response = self.guest_client.get(
-            reverse('posts:post_details', 
+            reverse('posts:post_details',
                     kwargs={'post_id': PostPagesTests.post.pk}))
         comments_context = response.context['comments']
         comments = PostPagesTests.post.comments.all()

@@ -142,4 +142,3 @@ class PostsURLTest(TestCase):
                     kwargs={'post_id':
                             PostsURLTest.post.pk}), follow=True)
         self.assertEqual(response.status_code, 200)
-
