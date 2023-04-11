@@ -1,5 +1,6 @@
 import shutil
 import tempfile
+from http import HTTPStatus
 from django import forms
 from django.test import TestCase, Client, override_settings
 from django.contrib.auth import get_user_model
@@ -60,6 +61,12 @@ class PostPagesTests(TestCase):
         self.guest_client = Client()
         self.authorized_client = Client()
         self.authorized_client.force_login(PostPagesTests.user)
+        self.follower = User.objects.create_user(username='Follower')
+        self.follower_client = Client()
+        self.follower_client.force_login(self.follower)
+        self.second_user = User.objects.create_user(username='secondUser')
+        self.second_client = Client()
+        self.second_client.force_login(self.second_user)
 
     def test_pages_uses_correct_template(self):
         """URL-адрес использует соответствующий шаблон."""
@@ -111,14 +118,11 @@ class PostPagesTests(TestCase):
     def test_follow_index_page_show_correct_context(self):
         """Новая запись пользователя появляется в ленте тех,
         кто на него подписан и не появляется в ленте тех, кто не подписан."""
-        follower = User.objects.create_user(username='Follower')
-        follower_client = Client()
-        follower_client.force_login(follower)
         Follow.objects.create(
-            user=follower,
+            user=self.follower,
             author=PostPagesTests.user
         )
-        response = follower_client.get(reverse('posts:follow_index'))
+        response = self.follower_client.get(reverse('posts:follow_index'))
         page_obj = response.context['page_obj']
         posts = PostPagesTests.user.posts.all()
         self.assertQuerysetEqual(page_obj, posts, lambda x: x)
@@ -126,25 +130,22 @@ class PostPagesTests(TestCase):
     def test_user_can_follow_and_unfollow(self):
         """Авторизованный пользователь может подписываться на других
         пользователей и удалять их из подписок."""
-        follower = User.objects.create_user(username='Follower')
-        follower_client = Client()
-        follower_client.force_login(follower)
-        response = follower_client.get(
+        response = self.follower_client.get(
             reverse('posts:profile_follow',
                     kwargs={'username': 'HasNoName'}), follow=True)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, HTTPStatus.OK)
         self.assertTrue(
             Follow.objects.filter(
-                user=follower,
+                user=self.follower,
                 author=PostPagesTests.user,
             ).exists()
         )
-        response_unfollow = follower_client.get(
+        response_unfollow = self.follower_client.get(
             reverse('posts:profile_unfollow',
                     kwargs={'username': 'HasNoName'}), follow=True)
-        self.assertEqual(response_unfollow.status_code, 200)
+        self.assertEqual(response_unfollow.status_code, HTTPStatus.OK)
         self.assertEqual(Follow.objects.filter(
-            user=follower,
+            user=self.follower,
             author=PostPagesTests.user
         ).count(), 0)
 
@@ -250,3 +251,87 @@ class PostPagesTests(TestCase):
         response_second = self.authorized_client.get(reverse('posts:index'))
         posts_second = response_second.content
         self.assertNotEqual(posts_first, posts_second)
+
+    def test_post_create_not_authorized(self):
+        post_count = Post.objects.count()
+        small_img = (
+            b'\x47\x49\x46\x38\x39\x61\x02\x00'
+            b'\x01\x00\x80\x00\x00\x00\x00\x00'
+            b'\xFF\xFF\xFF\x21\xF9\x04\x00\x00'
+            b'\x00\x00\x00\x2C\x00\x00\x00\x00'
+            b'\x02\x00\x01\x00\x00\x02\x02\x0C'
+            b'\x0A\x00\x3B'
+        )
+        uploaded = SimpleUploadedFile(
+            name='small.jpeg',
+            content=small_img,
+            content_type='image/jpeg'
+        )
+        post_data = {
+            'text': 'Текст нового поста',
+            'group': PostPagesTests.group.pk,
+            'author': PostPagesTests.user,
+            'image': uploaded,
+        }
+        self.guest_client.post(
+            reverse('posts:post_create'),
+            data=post_data
+        )
+        self.assertEqual(Post.objects.count(), post_count)
+        self.assertFalse(
+            Post.objects.filter(
+                text='Текст нового поста',
+                group=PostPagesTests.group.pk,
+                author=PostPagesTests.user,
+                image='posts/small.jpeg'
+            ).exists()
+        )
+
+        context_dict = {
+            reverse('posts:index'): Post.objects.all(),
+            reverse('posts:group_list',
+                    kwargs={'slug': 'test-slug'}):
+                        PostPagesTests.group.posts.all(),
+            reverse('posts:profile',
+                    kwargs={'username': 'HasNoName'}):
+                        PostPagesTests.user.posts.all()
+        }
+
+        for reverse_name, posts in context_dict.items():
+            with self.subTest(reverse_name=reverse_name):
+                response = self.guest_client.get(reverse_name)
+                page_obj = response.context['page_obj']
+                self.assertQuerysetEqual(page_obj, posts, lambda x: x)
+
+    def test_post_edit_not_author(self):
+        new_post = Post.objects.create(
+            text='Текст второго поста',
+            author=PostPagesTests.user,
+            group=PostPagesTests.group,
+        )
+
+        post_data = {
+            'text': 'Новый текст поста',
+            'group': new_post.group.pk,
+        }
+
+        self.second_client.post(
+            reverse('posts:post_edit',
+                    kwargs={'post_id':
+                            new_post.pk}),
+            data=post_data
+        )
+        self.assertFalse(
+            Post.objects.filter(
+                text='Новый текст поста',
+                group=new_post.group.pk,
+                author=PostPagesTests.user,
+            ).exists()
+        )
+        self.assertTrue(
+            Post.objects.filter(
+                text='Текст второго поста',
+                group=new_post.group.pk,
+                author=PostPagesTests.user,
+            ).exists()
+        )

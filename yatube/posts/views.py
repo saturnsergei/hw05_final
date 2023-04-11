@@ -136,7 +136,7 @@ def add_comment(request, post_id):
 @login_required
 def follow_index(request):
     post_ids = request.user.follower.values_list('author__posts', flat=True)
-    post_list = Post.objects.filter(id__in=post_ids).all()
+    post_list = Post.objects.filter(id__in=post_ids)
     page_obj = paginate(request, post_list)
     context = {
         'page_obj': page_obj,
